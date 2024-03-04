@@ -1,8 +1,7 @@
 #ifndef UTILS_H
 #define UTILS_H
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstdlib>
+#include <iostream>
 
 // MACROS
 #define SERVER_IP "127.0.0.1"
@@ -16,39 +15,74 @@
 #define TIMEOUT 2
 #define MAX_SEQUENCE 1024
 
-
-
-// Packet Layout
-// You may change this if you want to
-struct packet {
+class Packet {
+public:
+    Packet(unsigned short seqnum, unsigned short acknum, bool last, bool ack, unsigned int length, const char* payload);
+    unsigned short getSeqnum();
+    unsigned short getAcknum();
+    bool isAck();
+    bool isLast();
+    unsigned int getLength();
+    char* getPayload();
+    void printRecv();
+    void printSend(bool isResend);
+private:
     unsigned short seqnum;
     unsigned short acknum;
-    char ack;
-    char last;
+    bool ack;
+    bool last;
     unsigned int length;
     char payload[PAYLOAD_SIZE];
 };
 
-// Utility function to build a packet
-void build_packet(struct packet* pkt, unsigned short seqnum, unsigned short acknum, char last, char ack,unsigned int length, const char* payload) {
-    pkt->seqnum = seqnum;
-    pkt->acknum = acknum;
-    pkt->ack = ack;
-    pkt->last = last;
-    pkt->length = length;
-    memcpy(pkt->payload, payload, length);
+Packet::Packet(unsigned short seqnum, unsigned short acknum, bool last, bool ack, unsigned int length, const char* payload) {
+    this->seqnum = seqnum;
+    this->acknum = acknum;
+    this->ack = ack;
+    this->last = last;
+    this->length = length;
+    std::memcpy(this->payload, payload, length);
 }
 
-// Utility function to print a packet
-void printRecv(struct packet* pkt) {
-    printf("RECV %d %d%s%s\n", pkt->seqnum, pkt->acknum, pkt->last ? " LAST": "", (pkt->ack) ? " ACK": "");
+inline unsigned short Packet::getSeqnum()
+{
+    return seqnum;
 }
 
-void printSend(struct packet* pkt, int resend) {
-    if (resend)
-        printf("RESEND %d %d%s%s\n", pkt->seqnum, pkt->acknum, pkt->last ? " LAST": "", pkt->ack ? " ACK": "");
+inline unsigned short Packet::getAcknum()
+{
+    return acknum;
+}
+
+inline bool Packet::isAck()
+{
+    return ack;
+}
+
+inline bool Packet::isLast()
+{
+    return last;
+}
+
+unsigned int Packet::getLength()
+{
+    return length;
+}
+
+inline char* Packet::getPayload()
+{
+    return payload;
+}
+
+inline void Packet::printRecv() {
+    std::cout << "RECV " << seqnum << ' ' << acknum << (last ? " LAST" : "") << (ack ? " ACK" : "") << '\n';
+}
+
+inline void Packet::printSend(bool isResend) {
+    if (isResend)
+        std::cout << "RESEND " << seqnum << ' ' << acknum << (last ? " LAST" : "") << (ack ? " ACK" : "") << '\n';
     else
-        printf("SEND %d %d%s%s\n", pkt->seqnum, pkt->acknum, pkt->last ? " LAST": "", pkt->ack ? " ACK": "");
+        std::cout << "SEND " << seqnum << ' ' << acknum << (last ? " LAST" : "") << (ack ? " ACK" : "") << '\n';
 }
 
 #endif
