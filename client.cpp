@@ -6,6 +6,7 @@
 #include <ctime>
 #include <string>
 #include <fstream>
+#include <vector>
 
 #include "utils.h"
 
@@ -14,14 +15,14 @@ int main(int argc, char *argv[]) {
     int listen_sockfd, send_sockfd;
     sockaddr_in client_addr, server_addr_to, server_addr_from;
     socklen_t addr_size = sizeof(server_addr_to);
-    struct timeval tv;
+    timeval tv;
     //Packet pkt;
     //Packet ack_pkt;
-    char buffer[PAYLOAD_SIZE];
+    //char buffer[PAYLOAD_SIZE];
     unsigned short seq_num = 0;
     unsigned short ack_num = 0;
-    char last = 0;
-    char ack = 0;
+    bool last = false;
+    bool ack = false;
 
     // read filename from command line argument
     if (argc != 2) {
@@ -75,7 +76,58 @@ int main(int argc, char *argv[]) {
 
     // TODO: Read from file, and initiate reliable data transfer to the server
 
- 
+    std::vector<char> buffer(MAX_PACKET_SIZE);
+
+    while (!last) {
+        textStream.read(buffer.data(), PAYLOAD_SIZE);
+
+        if (textStream.eof())
+        {
+            last = true;
+        }
+
+        unsigned short numCharRead = textStream.gcount();
+
+        Packet packet(SERVER_PORT_TO, CLIENT_PORT, seq_num, ack_num, last, ack, numCharRead, buffer.data());
+
+        sendto(send_sockfd, packet.getPacket(), packet.getLength(), 0, (sockaddr*) &server_addr_to, addr_size);
+
+        packet.printSend(false);
+
+        int bytesRead = recv(listen_sockfd, buffer.data(), MAX_PACKET_SIZE, 0);
+        if (bytesRead < 0) {
+            std::cerr << "Error reading from socket.\n";
+            close(listen_sockfd);
+            close(send_sockfd);
+            textStream.close();
+            return 1;
+        }
+
+        Packet ack(bytesRead, buffer.data());
+
+        ack.printRecv();
+
+        while (ack.getAcknum() == seq_num) {
+            sendto(send_sockfd, packet.getPacket(), packet.getLength(), 0, (sockaddr*) &server_addr_to, addr_size);
+
+            packet.printSend(true);
+
+            bytesRead = recv(listen_sockfd, buffer.data(), MAX_PACKET_SIZE, 0);
+            if (bytesRead < 0) {
+                std::cerr << "Error reading from socket.\n";
+                close(listen_sockfd);
+                close(send_sockfd);
+                textStream.close();
+                return 1;
+            }
+
+            ack = Packet(bytesRead, buffer.data());
+
+            ack.printRecv();
+        }
+
+        seq_num = ack.getAcknum();
+    }
     
     textStream.close();
     close(listen_sockfd);

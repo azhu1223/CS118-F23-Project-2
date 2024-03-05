@@ -11,10 +11,9 @@
 int main() {
     int listen_sockfd, send_sockfd;
     sockaddr_in server_addr, client_addr_from, client_addr_to;
-    //Packet buffer;
+    char buffer[MAX_PACKET_SIZE];
     socklen_t addr_size = sizeof(client_addr_from);
     int expected_seq_num = 0;
-    int recv_len;
     //Packet ack_pkt;
 
     // Create a UDP socket for sending
@@ -61,7 +60,35 @@ int main() {
 
     // TODO: Receive file from the client and save it as output.txt
 
-    
+    bool last = false;
+
+    while (!last) {
+        int bytesRead = read(listen_sockfd, buffer, MAX_PACKET_SIZE);
+
+        if (bytesRead < 0) {
+            std::cerr << "Error reading from socket.\n";
+            close(listen_sockfd);
+            close(send_sockfd);
+            return 1;
+        }
+
+        Packet packet(bytesRead, buffer);
+        packet.printRecv();
+
+        if (packet.getSeqnum() == expected_seq_num) {
+            last = packet.isLast();
+
+            expected_seq_num += packet.getPayloadLength();
+
+            outputStream.write(packet.getPayload(), packet.getPayloadLength());
+        }
+
+        Packet ack(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
+
+        sendto(send_sockfd, ack.getPacket(), ack.getLength(), 0, (sockaddr*) &client_addr_to, addr_size);
+
+        ack.printSend(false);
+    }
 
     outputStream.close();
     close(listen_sockfd);
