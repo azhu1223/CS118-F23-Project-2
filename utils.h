@@ -18,10 +18,10 @@
 
 class Packet {
 public:
-    Packet(unsigned short source_port, unsigned short dest_port, unsigned short seqnum, unsigned short acknum, bool last, bool ack, unsigned short payloadLength, const char* payload);
+    Packet(unsigned short source_port, unsigned short dest_port, unsigned int seqnum, unsigned int acknum, bool last, bool ack, unsigned short payloadLength, const char* payload);
     Packet(unsigned int packetSize, char* packet);
-    unsigned short getSeqnum();
-    unsigned short getAcknum();
+    unsigned int getSeqnum();
+    unsigned int getAcknum();
     bool isAck();
     bool isLast();
     bool isValid();
@@ -34,8 +34,8 @@ public:
 private:
     unsigned short source_port;
     unsigned short dest_port;
-    unsigned short seqnum;
-    unsigned short acknum;
+    unsigned int seqnum;
+    unsigned int acknum;
     bool ack;
     bool last;
     bool checksumValid;
@@ -48,7 +48,7 @@ private:
     void checkChecksum(unsigned short packetSum);
 };
 
-Packet::Packet(unsigned short source_port, unsigned short dest_port, unsigned short seqnum, unsigned short acknum, bool last, bool ack, unsigned short payloadLength, const char* payload) {
+Packet::Packet(unsigned short source_port, unsigned short dest_port, unsigned int seqnum, unsigned int acknum, bool last, bool ack, unsigned short payloadLength, const char* payload) {
     this->source_port = source_port;
     this->dest_port = dest_port;
     this->seqnum = seqnum;
@@ -56,15 +56,15 @@ Packet::Packet(unsigned short source_port, unsigned short dest_port, unsigned sh
     this->ack = ack;
     this->last = last;
     this->payloadLength = payloadLength;
-    this->length = payloadLength + 12;
-    // 8 for header, 2 for seqnum or acknum, 1 for ack, 1 for last
+    this->length = payloadLength + 14;
+    // 8 for header, 4 for seqnum or acknum, 1 for ack, 1 for last
     std::memcpy(this->payload, payload, payloadLength);
 
     makePacket();
 }
 
 Packet::Packet(unsigned int packetSize, char* packet) {
-    unsigned int payloadSize = packetSize - 12;
+    unsigned int payloadSize = packetSize - 14;
     char* packetPlace = packet;
 
     unsigned short checksum;
@@ -84,9 +84,9 @@ Packet::Packet(unsigned int packetSize, char* packet) {
     packetPlace += 2;
 
     // Extract reliability requirements
-    unsigned short ackOrSeq;
-    std::memcpy(&ackOrSeq, packetPlace, 2);
-    packetPlace += 2;
+    unsigned int ackOrSeq;
+    std::memcpy(&ackOrSeq, packetPlace, 4);
+    packetPlace += 4;
     std::memcpy(&ack, packetPlace, 1);
     packetPlace++;
     std::memcpy(&last, packetPlace, 1);
@@ -121,8 +121,8 @@ void Packet::makePacket() {
     packetPlace += 2;
     
     // Add additional data for reliable transfering
-    std::memcpy(packetPlace, ack ? &acknum : &seqnum, 2);
-    packetPlace += 2;
+    std::memcpy(packetPlace, ack ? &acknum : &seqnum, 4);
+    packetPlace += 4;
     std::memcpy(packetPlace, &ack, 1);
     packetPlace++;
     std::memcpy(packetPlace, &last, 1);
@@ -144,11 +144,11 @@ void Packet::checkChecksum(unsigned short checksum) {
     */
 }
 
-inline unsigned short Packet::getSeqnum() {
+inline unsigned int Packet::getSeqnum() {
     return seqnum;
 }
 
-inline unsigned short Packet::getAcknum() {
+inline unsigned int Packet::getAcknum() {
     return acknum;
 }
 

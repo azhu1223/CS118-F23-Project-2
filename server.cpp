@@ -13,7 +13,7 @@ int main() {
     sockaddr_in server_addr, client_addr_from, client_addr_to;
     char buffer[MAX_PACKET_SIZE];
     socklen_t addr_size = sizeof(client_addr_from);
-    int expected_seq_num = 0;
+    unsigned int expected_seq_num = 0;
     //Packet ack_pkt;
 
     // Create a UDP socket for sending

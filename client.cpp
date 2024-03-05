@@ -19,8 +19,8 @@ int main(int argc, char *argv[]) {
     //Packet pkt;
     //Packet ack_pkt;
     //char buffer[PAYLOAD_SIZE];
-    unsigned short seq_num = 0;
-    unsigned short ack_num = 0;
+    unsigned int seq_num = 0;
+    unsigned int ack_num = 0;
     bool last = false;
     bool ack = false;
 
