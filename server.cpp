@@ -38,7 +38,7 @@ int main() {
 
     // Setup timeout
     timeval tv = {0, 0};
-    tv.tv_sec = 1;// Setup timeout
+    tv.tv_usec = 200;// Setup timeout
 
     setsockopt(listen_sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
