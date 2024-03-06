@@ -36,6 +36,12 @@ int main() {
     server_addr.sin_port = htons(SERVER_PORT);
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
+    // Setup timeout
+    timeval tv = {0, 0};
+    tv.tv_sec = 1;// Setup timeout
+
+    setsockopt(listen_sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
     // Bind the listen socket to the server address
     if (bind(listen_sockfd, (sockaddr*) &server_addr, sizeof(server_addr)) < 0) {
         std::cerr << "Bind failed.\n";
@@ -63,31 +69,48 @@ int main() {
     bool last = false;
 
     while (!last) {
-        int bytesRead = read(listen_sockfd, buffer, MAX_PACKET_SIZE);
+        Packet ackPacket;
+        bool resend = false;
+        int bytesRead = receivePacket(listen_sockfd, buffer);
 
         if (bytesRead < 0) {
-            std::cerr << "Error reading from socket.\n";
-            close(listen_sockfd);
-            close(send_sockfd);
-            return 1;
+            // Timeout
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                std::cout << "Timeout!\n";
+                ackPacket = Packet(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
+                resend = true;
+            }
+
+            // Some other error occurred
+            else {
+                std::cerr << "Error reading from socket.\n";
+                close(listen_sockfd);
+                close(send_sockfd);
+                return 1;
+            }
+        }
+        
+        // If a packet was read
+        else {
+            Packet packet(bytesRead, buffer);
+            packet.printRecv();
+
+            if (packet.getSeqnum() == expected_seq_num) {
+                last = packet.isLast();
+
+                expected_seq_num += packet.getPayloadLength();
+
+                outputStream.write(packet.getPayload(), packet.getPayloadLength());
+            }
+
+            else {
+                resend = true;
+            }
+
+            ackPacket = Packet(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
         }
 
-        Packet packet(bytesRead, buffer);
-        packet.printRecv();
-
-        if (packet.getSeqnum() == expected_seq_num) {
-            last = packet.isLast();
-
-            expected_seq_num += packet.getPayloadLength();
-
-            outputStream.write(packet.getPayload(), packet.getPayloadLength());
-        }
-
-        Packet ack(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
-
-        sendto(send_sockfd, ack.getPacket(), ack.getLength(), 0, (sockaddr*) &client_addr_to, addr_size);
-
-        ack.printSend(false);
+        sendPacket(send_sockfd, &client_addr_to, addr_size, &ackPacket, resend);
     }
 
     outputStream.close();

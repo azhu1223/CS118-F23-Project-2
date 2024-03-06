@@ -1,5 +1,6 @@
 #ifndef UTILS_H
 #define UTILS_H
+#include <arpa/inet.h>
 #include <cstdlib>
 #include <iostream>
 
@@ -20,6 +21,7 @@ class Packet {
 public:
     Packet(unsigned short source_port, unsigned short dest_port, unsigned int seqnum, unsigned int acknum, bool last, bool ack, unsigned short payloadLength, const char* payload);
     Packet(unsigned int packetSize, char* packet);
+    Packet();
     unsigned int getSeqnum();
     unsigned int getAcknum();
     bool isAck();
@@ -47,6 +49,10 @@ private:
     unsigned short makeChecksum();
     void checkChecksum(unsigned short packetSum);
 };
+
+Packet::Packet() {
+
+}
 
 Packet::Packet(unsigned short source_port, unsigned short dest_port, unsigned int seqnum, unsigned int acknum, bool last, bool ack, unsigned short payloadLength, const char* payload) {
     this->source_port = source_port;
@@ -189,6 +195,16 @@ inline void Packet::printSend(bool isResend) {
         std::cout << "RESEND " << seqnum << ' ' << acknum << (last ? " LAST" : "") << (ack ? " ACK" : "") << '\n';
     else
         std::cout << "SEND " << seqnum << ' ' << acknum << (last ? " LAST" : "") << (ack ? " ACK" : "") << '\n';
+}
+
+void sendPacket(int fd, sockaddr_in* addr, socklen_t addr_size, Packet* packet, bool resend) {
+    sendto(fd, packet->getPacket(), packet->getLength(), 0, (sockaddr*) addr, addr_size);
+
+    packet->printSend(resend);
+}
+
+int receivePacket(int fd, char* buffer) {
+    return recv(fd, buffer, MAX_PACKET_SIZE, 0);
 }
 
 #endif

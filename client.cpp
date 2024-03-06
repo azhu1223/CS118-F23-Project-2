@@ -7,6 +7,7 @@
 #include <string>
 #include <fstream>
 #include <vector>
+#include <cerrno>
 
 #include "utils.h"
 
@@ -15,10 +16,6 @@ int main(int argc, char *argv[]) {
     int listen_sockfd, send_sockfd;
     sockaddr_in client_addr, server_addr_to, server_addr_from;
     socklen_t addr_size = sizeof(server_addr_to);
-    timeval tv;
-    //Packet pkt;
-    //Packet ack_pkt;
-    //char buffer[PAYLOAD_SIZE];
     unsigned int seq_num = 0;
     unsigned int ack_num = 0;
     bool last = false;
@@ -58,6 +55,12 @@ int main(int argc, char *argv[]) {
     client_addr.sin_port = htons(CLIENT_PORT);
     client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
+    // Setup timeout
+    timeval tv = {0, 0};
+    tv.tv_sec = 1;
+    setsockopt(listen_sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+
     // Bind the listen socket to the client address
     if (bind(listen_sockfd, (sockaddr*) &client_addr, sizeof(client_addr)) < 0) {
         std::cerr << "Bind failed.\n";
@@ -88,19 +91,75 @@ int main(int argc, char *argv[]) {
 
         unsigned short numCharRead = textStream.gcount();
 
-        Packet packet(SERVER_PORT_TO, CLIENT_PORT, seq_num, ack_num, last, ack, numCharRead, buffer.data());
+        Packet packet(SERVER_PORT_TO, CLIENT_PORT, seq_num, 0, last, ack, numCharRead, buffer.data());
 
-        sendto(send_sockfd, packet.getPacket(), packet.getLength(), 0, (sockaddr*) &server_addr_to, addr_size);
+        bool validAck = false;
+        bool resend = false;
+        ack_num += packet.getPayloadLength();
+
+        while (!validAck) {
+            sendPacket(send_sockfd, &server_addr_to, addr_size, &packet, resend);
+            int bytesRead = receivePacket(listen_sockfd, buffer.data());
+
+            // If there was a non-timeout error
+            if (bytesRead <= 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+            {
+                std::cerr << "Error reading from socket.\n";
+                close(listen_sockfd);
+                close(send_sockfd);
+                textStream.close();
+                return 1;
+            }
+            // Received an ACK
+            else if (bytesRead > 0)
+            {
+                Packet ack(bytesRead, buffer.data());
+
+                ack.printRecv();
+
+                // Check if ACK is the expected ACK
+                if (ack.isAck() && ack.getAcknum() == ack_num) {
+                    std::cout << "Valid ACK.\n";
+                    validAck = true;
+                }
+
+                else {
+                    resend = true;
+                }
+            }
+
+            // There was a timeout
+            else {
+                std::cout << "Timeout!\n";
+                resend = true;
+            }
+        }
+
+        seq_num = ack_num;
+
+
+        /*sendto(send_sockfd, packet.getPacket(), packet.getLength(), 0, (sockaddr*) &server_addr_to, addr_size);
 
         packet.printSend(false);
 
         int bytesRead = recv(listen_sockfd, buffer.data(), MAX_PACKET_SIZE, 0);
-        if (bytesRead < 0) {
-            std::cerr << "Error reading from socket.\n";
-            close(listen_sockfd);
-            close(send_sockfd);
-            textStream.close();
-            return 1;
+        while (bytesRead < 0)
+        {
+            std::cout << "Timeout!\n";
+            // If there was a non-timeout error
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                std::cerr << "Error reading from socket.\n";
+                close(listen_sockfd);
+                close(send_sockfd);
+                textStream.close();
+                return 1;
+            }
+
+            sendto(send_sockfd, packet.getPacket(), packet.getLength(), 0, (sockaddr*) &server_addr_to, addr_size);
+
+            packet.printSend(true);
+
+            bytesRead = recv(listen_sockfd, buffer.data(), MAX_PACKET_SIZE, 0);
         }
 
         Packet ack(bytesRead, buffer.data());
@@ -126,7 +185,7 @@ int main(int argc, char *argv[]) {
             ack.printRecv();
         }
 
-        seq_num = ack.getAcknum();
+        seq_num = ack.getAcknum();*/
     }
     
     textStream.close();
@@ -134,4 +193,3 @@ int main(int argc, char *argv[]) {
     close(send_sockfd);
     return 0;
 }
-
