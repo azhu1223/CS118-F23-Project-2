@@ -21,18 +21,20 @@ class Packet {
 public:
     Packet(unsigned short source_port, unsigned short dest_port, unsigned int seqnum, unsigned int acknum, bool last, bool ack, unsigned short payloadLength, const char* payload);
     Packet(unsigned int packetSize, char* packet);
+    Packet(const Packet& packet);
     Packet();
-    unsigned int getSeqnum();
-    unsigned int getAcknum();
-    bool isAck();
-    bool isLast();
-    bool isValid();
-    unsigned int getPayloadLength();
-    char* getPayload();
-    char* getPacket();
-    unsigned short getLength();
-    void printRecv();
-    void printSend(bool isResend);
+    Packet& operator=(const Packet& packet);
+    unsigned int getSeqnum() const;
+    unsigned int getAcknum() const;
+    bool isAck() const;
+    bool isLast() const;
+    bool isValid() const;
+    unsigned int getPayloadLength() const;
+    char* getPayload() const;
+    char* getPacket() const;
+    unsigned short getLength() const;
+    void printRecv() const;
+    void printSend(bool isResend) const;
 private:
     unsigned short source_port;
     unsigned short dest_port;
@@ -112,6 +114,38 @@ Packet::Packet(unsigned int packetSize, char* packet) {
     checkChecksum(checksum);
 }
 
+Packet::Packet(const Packet& packet) {
+    this->source_port = packet.source_port;
+    this->dest_port = packet.dest_port;
+    this->seqnum = packet.seqnum;
+    this->acknum = packet.acknum;
+    this->ack = packet.ack;
+    this->last = packet.last;
+    this->payloadLength = packet.payloadLength;
+    this->length = payloadLength + 14;
+    // 8 for header, 4 for seqnum or acknum, 1 for ack, 1 for last
+    std::memcpy(this->payload, packet.payload, payloadLength);
+}
+
+Packet& Packet::operator=(const Packet& packet) {
+    if (this == &packet) {
+        return *this;
+    }
+
+    this->source_port = packet.source_port;
+    this->dest_port = packet.dest_port;
+    this->seqnum = packet.seqnum;
+    this->acknum = packet.acknum;
+    this->ack = packet.ack;
+    this->last = packet.last;
+    this->payloadLength = packet.payloadLength;
+    this->length = payloadLength + 14;
+    // 8 for header, 4 for seqnum or acknum, 1 for ack, 1 for last
+    std::memcpy(this->payload, packet.payload, payloadLength);
+
+    return *this;
+}
+
 void Packet::makePacket() {
     unsigned short checksum = makeChecksum();
     // Create header
@@ -150,47 +184,47 @@ void Packet::checkChecksum(unsigned short checksum) {
     */
 }
 
-inline unsigned int Packet::getSeqnum() {
+inline unsigned int Packet::getSeqnum() const {
     return seqnum;
 }
 
-inline unsigned int Packet::getAcknum() {
+inline unsigned int Packet::getAcknum() const {
     return acknum;
 }
 
-inline bool Packet::isAck() {
+inline bool Packet::isAck() const {
     return ack;
 }
 
-inline bool Packet::isLast() {
+inline bool Packet::isLast() const {
     return last;
 }
 
-inline bool Packet::isValid() {
+inline bool Packet::isValid() const {
     return checksumValid;
 }
 
-inline unsigned int Packet::getPayloadLength() {
+inline unsigned int Packet::getPayloadLength() const {
     return payloadLength;
 }
 
-inline char* Packet::getPayload() {
-    return payload;
+inline char* Packet::getPayload() const {
+    return (char*) (payload);
 }
 
-inline char* Packet::getPacket() {
-    return packet;
+inline char* Packet::getPacket() const {
+    return (char*) packet;
 }
 
-unsigned short Packet::getLength() {
+unsigned short Packet::getLength() const {
     return length;
 }
 
-inline void Packet::printRecv() {
+inline void Packet::printRecv() const {
     std::cout << "RECV " << seqnum << ' ' << acknum << (last ? " LAST" : "") << (ack ? " ACK" : "") << '\n';
 }
 
-inline void Packet::printSend(bool isResend) {
+inline void Packet::printSend(bool isResend) const {
     if (isResend)
         std::cout << "RESEND " << seqnum << ' ' << acknum << (last ? " LAST" : "") << (ack ? " ACK" : "") << '\n';
     else
@@ -205,6 +239,14 @@ void sendPacket(int fd, sockaddr_in* addr, socklen_t addr_size, Packet* packet, 
 
 int receivePacket(int fd, char* buffer) {
     return recv(fd, buffer, MAX_PACKET_SIZE, 0);
+}
+
+inline std::strong_ordering operator<=>(Packet left, Packet right) {
+    if (left.isAck()) {
+        return left.getAcknum() <=> right.getAcknum();
+    }
+
+    return left.getSeqnum() <=> right.getSeqnum();
 }
 
 #endif

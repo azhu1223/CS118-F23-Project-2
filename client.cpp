@@ -57,7 +57,7 @@ int main(int argc, char *argv[]) {
 
     // Setup timeout
     timeval tv = {0, 0};
-    tv.tv_usec = 200;
+    tv.tv_usec = 120;
     setsockopt(listen_sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
 

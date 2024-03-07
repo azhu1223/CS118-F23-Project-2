@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <iostream>
 #include <fstream>
+#include <queue>
 
 #include "utils.h"
 
@@ -38,7 +39,7 @@ int main() {
 
     // Setup timeout
     timeval tv = {0, 0};
-    tv.tv_usec = 200;// Setup timeout
+    tv.tv_usec = 120;// Setup timeout
 
     setsockopt(listen_sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
@@ -66,18 +67,40 @@ int main() {
 
     // TODO: Receive file from the client and save it as output.txt
 
+    // Priority queue to order Packets by seqnums. If the top Packet is the one being looked for, pop it and add it to the stream
+    std::priority_queue<Packet, std::vector<Packet>, std::greater<Packet>> queue;
+
     bool last = false;
 
     while (!last) {
         Packet ackPacket;
+
+        // Check queue for needed packets.
+        if (!queue.empty()) {
+            Packet queueTop = queue.top();
+
+            while (!queue.empty() && queueTop.getSeqnum() == expected_seq_num) {
+                last = queueTop.isLast();
+
+                expected_seq_num += queueTop.getPayloadLength();
+
+                outputStream.write(queueTop.getPayload(), queueTop.getPayloadLength());
+
+                ackPacket = Packet(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
+                sendPacket(send_sockfd, &client_addr_to, addr_size, &ackPacket, false);
+
+                queue.pop();
+            }
+        }
+
         bool resend = false;
+        // Need to change so that the server keeps reading until timeout.
         int bytesRead = receivePacket(listen_sockfd, buffer);
 
         if (bytesRead < 0) {
             // Timeout
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 std::cout << "Timeout!\n";
-                ackPacket = Packet(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
                 resend = true;
             }
 
@@ -103,12 +126,19 @@ int main() {
                 outputStream.write(packet.getPayload(), packet.getPayloadLength());
             }
 
-            else {
-                resend = true;
+            else if (packet.getSeqnum() < expected_seq_num) {
+                std::cout << "Detected duplicated packet that was already written to stream. Ignoring.\n";
+                continue;
             }
 
-            ackPacket = Packet(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
+            else {
+                std::cout << "Detected out of order packet. Enqueuing.\n";
+                queue.push(packet);
+                resend = true;
+            }
         }
+
+        ackPacket = Packet(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
 
         sendPacket(send_sockfd, &client_addr_to, addr_size, &ackPacket, resend);
     }
