@@ -3,6 +3,11 @@
 #include <arpa/inet.h>
 #include <cstdlib>
 #include <iostream>
+#include <set>
+
+class Packet;
+
+typedef std::set<Packet, std::greater<Packet>> packet_queue;
 
 // MACROS
 #define SERVER_IP "127.0.0.1"
@@ -247,6 +252,39 @@ inline std::strong_ordering operator<=>(Packet left, Packet right) {
     }
 
     return left.getSeqnum() <=> right.getSeqnum();
+}
+
+// Returns -1 on fail.
+int readAndEnqueueAllPackets(int fd, unsigned int expectedSeqNum, packet_queue* queue) {
+    char buffer[MAX_PACKET_SIZE];
+
+    bool timedOut = false;
+    while (!timedOut) {
+        int bytesRead = receivePacket(fd, buffer);
+
+        if (bytesRead < 0) {
+            // Timeout
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                std::cout << "Timeout!\n";
+                timedOut = true;
+            }
+
+            // Some other error occurred
+            else {
+                return -1;
+            }
+        }
+
+        else {
+            Packet temp(bytesRead, buffer);
+
+            if (temp.getSeqnum() >= expectedSeqNum) { 
+                queue->insert(temp);
+            }
+        }
+    }
+
+    return 0;
 }
 
 #endif

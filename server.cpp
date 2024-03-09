@@ -5,14 +5,13 @@
 #include <unistd.h>
 #include <iostream>
 #include <fstream>
-#include <queue>
+#include <set>
 
 #include "utils.h"
 
 int main() {
     int listen_sockfd, send_sockfd;
     sockaddr_in server_addr, client_addr_from, client_addr_to;
-    char buffer[MAX_PACKET_SIZE];
     socklen_t addr_size = sizeof(client_addr_from);
     unsigned int expected_seq_num = 0;
     //Packet ack_pkt;
@@ -39,7 +38,7 @@ int main() {
 
     // Setup timeout
     timeval tv = {0, 0};
-    tv.tv_usec = 120;// Setup timeout
+    tv.tv_usec = 200;// Setup timeout
 
     setsockopt(listen_sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
@@ -68,79 +67,44 @@ int main() {
     // TODO: Receive file from the client and save it as output.txt
 
     // Priority queue to order Packets by seqnums. If the top Packet is the one being looked for, pop it and add it to the stream
-    std::priority_queue<Packet, std::vector<Packet>, std::greater<Packet>> queue;
+    packet_queue queue;
 
     bool last = false;
 
     while (!last) {
-        Packet ackPacket;
+        bool foundNextPacket = false;
+
+        // Read all incoming packets and enqueue
+        if (readAndEnqueueAllPackets(listen_sockfd, expected_seq_num, &queue) < 0) {
+            std::cerr << "Error reading from socket.\n";
+            close(listen_sockfd);
+            close(send_sockfd);
+            outputStream.close();
+            return 1;
+        }
 
         // Check queue for needed packets.
         if (!queue.empty()) {
-            Packet queueTop = queue.top();
+            auto beginningIt = queue.begin();
+            Packet queueTop = *beginningIt;
 
             while (!queue.empty() && queueTop.getSeqnum() == expected_seq_num) {
+                foundNextPacket = true;
+
                 last = queueTop.isLast();
 
                 expected_seq_num += queueTop.getPayloadLength();
 
                 outputStream.write(queueTop.getPayload(), queueTop.getPayloadLength());
 
-                ackPacket = Packet(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
-                sendPacket(send_sockfd, &client_addr_to, addr_size, &ackPacket, false);
-
-                queue.pop();
+                queue.erase(beginningIt);
             }
         }
 
-        bool resend = false;
-        // Need to change so that the server keeps reading until timeout.
-        int bytesRead = receivePacket(listen_sockfd, buffer);
+        // Send accumulated packet, or if the next expected seq num not found, resend previous packet.
+        Packet ackPacket(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
 
-        if (bytesRead < 0) {
-            // Timeout
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                std::cout << "Timeout!\n";
-                resend = true;
-            }
-
-            // Some other error occurred
-            else {
-                std::cerr << "Error reading from socket.\n";
-                close(listen_sockfd);
-                close(send_sockfd);
-                return 1;
-            }
-        }
-        
-        // If a packet was read
-        else {
-            Packet packet(bytesRead, buffer);
-            packet.printRecv();
-
-            if (packet.getSeqnum() == expected_seq_num) {
-                last = packet.isLast();
-
-                expected_seq_num += packet.getPayloadLength();
-
-                outputStream.write(packet.getPayload(), packet.getPayloadLength());
-            }
-
-            else if (packet.getSeqnum() < expected_seq_num) {
-                std::cout << "Detected duplicated packet that was already written to stream. Ignoring.\n";
-                continue;
-            }
-
-            else {
-                std::cout << "Detected out of order packet. Enqueuing.\n";
-                queue.push(packet);
-                resend = true;
-            }
-        }
-
-        ackPacket = Packet(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 0, nullptr);
-
-        sendPacket(send_sockfd, &client_addr_to, addr_size, &ackPacket, resend);
+        sendPacket(send_sockfd, &client_addr_to, addr_size, &ackPacket, !foundNextPacket);
     }
 
     outputStream.close();
