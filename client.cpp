@@ -82,100 +82,25 @@ int main(int argc, char *argv[]) {
 
     std::vector<char> buffer(MAX_PACKET_SIZE);
 
-    packet_list usable_packets;
+    packet_map usable_packets;
 
     unsigned int windowSize = WINDOW_SIZE;
 
     while (!last) {
         fillWindow(&textStream, &usable_packets, &seq_num, windowSize);
 
-        bool validAck = false;
+        sendWindow(send_sockfd, &usable_packets, &server_addr_to, addr_size);
 
-        while (!validAck) {
-            sendWindow(send_sockfd, &usable_packets, &server_addr_to, addr_size);
-
-            int bytesRead = receivePacket(listen_sockfd, buffer.data());
-
-            // There was a timeout
-            if (bytesRead < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                std::cout << "Timeout!\n";
-            }
-
-            else if (bytesRead > 0) {
-                Packet packet(bytesRead, buffer.data());
-                packet.printRecv();
-                unsigned int ack = packet.getAcknum();
-
-                if (ack > prev_ack_num) {
-                    validAck = true;
-                    prev_ack_num = ack;
-                }
-            }
-            
-            // Non-timeout error
-            else {
-                std::cerr << "Error reading from socket.\n";
-                close(listen_sockfd);
-                close(send_sockfd);
-                textStream.close();
-                return 1;
-            }
+        // Return value of -1 means read failed for some other reason other than timing out
+        if (readAcks(listen_sockfd, &usable_packets) < 0) {
+            std::cerr << "Error reading from socket.\n";
+            close(listen_sockfd);
+            close(send_sockfd);
+            textStream.close();
+            return 1;
         }
 
-        last = removeAckedPackets(&usable_packets, prev_ack_num);
-
-        /*textStream.read(buffer.data(), PAYLOAD_SIZE);
-
-        if (textStream.eof())
-        {
-            last = true;
-        }
-
-        unsigned short numCharRead = textStream.gcount();
-
-        Packet packet(SERVER_PORT_TO, CLIENT_PORT, seq_num, 0, last, false, numCharRead, buffer.data());
-
-        bool validAck = false;
-        bool resend = false;
-        ack_num += packet.getPayloadLength();
-
-        while (!validAck) {
-            sendPacket(send_sockfd, &server_addr_to, addr_size, &packet, resend);
-            int bytesRead = receivePacket(listen_sockfd, buffer.data());
-
-            // If there was a non-timeout error
-            if (bytesRead <= 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                std::cerr << "Error reading from socket.\n";
-                close(listen_sockfd);
-                close(send_sockfd);
-                textStream.close();
-                return 1;
-            }
-            // Received an ACK
-            else if (bytesRead > 0) {
-                Packet ack(bytesRead, buffer.data());
-
-                ack.printRecv();
-
-                // Check if ACK is the expected ACK
-                if (ack.isAck() && ack.getAcknum() == ack_num) {
-                    std::cout << "Valid ACK.\n";
-                    validAck = true;
-                }
-
-                else {
-                    resend = true;
-                }
-            }
-
-            // There was a timeout
-            else {
-                std::cout << "Timeout!\n";
-                resend = true;
-            }
-        }
-
-        seq_num = ack_num;*/
+        last = textStream.eof() && usable_packets.empty();
     }
     
     textStream.close();

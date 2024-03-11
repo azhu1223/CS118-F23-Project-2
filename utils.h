@@ -6,14 +6,14 @@
 #include <fstream>
 #include <set>
 #include <vector>
-#include <list>
+#include <unordered_map>
 #include <utility>
 
 class Packet;
 
 typedef std::set<Packet> packet_queue;
 // Maps packets to whether they've been sent before or not
-typedef std::list<std::pair<Packet, bool>> packet_list;
+typedef std::unordered_map<unsigned int, std::pair<Packet, bool>> packet_map;
 
 // MACROS
 #define SERVER_IP "127.0.0.1"
@@ -266,6 +266,12 @@ void sendPacket(int fd, sockaddr_in* addr, socklen_t addr_size, Packet* packet, 
     packet->printSend(resend);
 }
 
+void sendAck(int fd, sockaddr_in* addr, socklen_t addr_size, unsigned short source_port, unsigned short dest_port, 
+                unsigned int acknum, unsigned int ack_buffer_size, const char* ack_buffer, bool resend) {
+    Packet packet(source_port, dest_port, 0, acknum, false, true, ack_buffer_size, ack_buffer);
+    sendPacket(fd, addr, addr_size, &packet, resend);
+}
+
 int receivePacket(int fd, char* buffer) {
     int bytesRead =  recv(fd, buffer, MAX_PACKET_SIZE, 0);
 
@@ -299,8 +305,7 @@ bool checkQueue(packet_queue* queue, unsigned int* expected_seq_num, bool* last,
     Packet queueTop;
 
     bool foundNextPacket = false;
-
-    for (it = queue->begin(), queueTop = *it; !queue->empty() && queueTop.getSeqnum() == *expected_seq_num; it = queue->begin()) {
+    for (it = queue->begin(), queueTop = *it; !queue->empty() && queueTop.getSeqnum() == *expected_seq_num; queueTop = *it) {
         //std::cout << "Found next packet in queue.\n";
 
         foundNextPacket = true;
@@ -311,20 +316,24 @@ bool checkQueue(packet_queue* queue, unsigned int* expected_seq_num, bool* last,
 
         outputStream->write(queueTop.getPayload(), queueTop.getPayloadLength());
 
-        queue->erase(it);
+        std::cout << "Wrote packet in checkQueue with seqnum " << queueTop.getSeqnum() << '\n';
+
+        queue->erase(it++);
     }
 
     return foundNextPacket;
 }
 
-// Returns -1 on fail.
-int readAndEnqueuePackets(int fd, unsigned int* expectedSeqNum, packet_queue* queue, 
-                            std::ofstream* outputStream, bool* last, bool* foundNextPacket) {
+// Returns -1 on fail. TODO UPDATE TO ONLY ADD PACKETS IF THEY'RE NEW. OTHERWISE ONLY SEND ACK.
+int readAndEnqueuePackets(int listen_fd, unsigned int* expectedSeqNum, packet_queue* queue, 
+                            std::ofstream* outputStream, bool* last, bool* foundNextPacket, 
+                            int send_fd, sockaddr_in* addr, socklen_t addr_size, unsigned int ack_buffer_size, const char* ack_buffer) {
     std::vector<char> buffer(MAX_PACKET_SIZE);
 
     bool timedOut = false;
     while (!timedOut) {
-        int bytesRead = receivePacket(fd, buffer.data());
+        std::cout << "Reading next packet.\n";
+        int bytesRead = receivePacket(listen_fd, buffer.data());
 
         if (bytesRead < 0) {
             // Timeout
@@ -351,10 +360,15 @@ int readAndEnqueuePackets(int fd, unsigned int* expectedSeqNum, packet_queue* qu
             unsigned int seqnum = temp.getSeqnum();
 
             if (seqnum > *expectedSeqNum) { 
-                /*auto result = */queue->emplace(bytesRead, buffer.data());
-                /*if (result.second) {
-                    std::cout << "Successfully enqueued.\n";
-                }*/
+                auto result = queue->insert(temp);
+                if (result.second) {
+                    //std::cout << "Successfully enqueued.\n";
+                    sendAck(send_fd, addr, addr_size, SERVER_PORT, CLIENT_PORT_TO, temp.getSeqnum(), ack_buffer_size, ack_buffer, false);
+                }
+
+                else {
+                    sendAck(send_fd, addr, addr_size, SERVER_PORT, CLIENT_PORT_TO, temp.getSeqnum(), ack_buffer_size, ack_buffer, true);
+                }
             }
 
             else if (seqnum == *expectedSeqNum) {
@@ -363,9 +377,13 @@ int readAndEnqueuePackets(int fd, unsigned int* expectedSeqNum, packet_queue* qu
                 *foundNextPacket = true;
                 outputStream->write(temp.getPayload(), temp.getPayloadLength());
 
+                std::cout << "Wrote packet in enqueue with seqnum " << temp.getSeqnum() << '\n';
+
                 *expectedSeqNum += temp.getPayloadLength();
 
                 *last = temp.isLast();
+
+                sendAck(send_fd, addr, addr_size, SERVER_PORT, CLIENT_PORT_TO, temp.getSeqnum(), ack_buffer_size, ack_buffer, false);
 
                 if (!queue->empty()) {
                     checkQueue(queue, expectedSeqNum, last, outputStream);
@@ -374,6 +392,7 @@ int readAndEnqueuePackets(int fd, unsigned int* expectedSeqNum, packet_queue* qu
 
             else {
                 std::cout << "Duplicate packet detected. Skipping.\n";
+                sendAck(send_fd, addr, addr_size, SERVER_PORT, CLIENT_PORT_TO, temp.getSeqnum(), ack_buffer_size, ack_buffer, true);
             }
         }
     }
@@ -381,7 +400,7 @@ int readAndEnqueuePackets(int fd, unsigned int* expectedSeqNum, packet_queue* qu
     return 0;
 }
 
-void fillWindow(std::ifstream* textStream, packet_list* window, unsigned int* seq_num, unsigned int windowSize) {
+void fillWindow(std::ifstream* textStream, packet_map* window, unsigned int* seq_num, unsigned int windowSize) {
     std::vector<char> buffer(PAYLOAD_SIZE);
 
     while (!textStream->eof() && window->size() < windowSize) {
@@ -394,40 +413,55 @@ void fillWindow(std::ifstream* textStream, packet_list* window, unsigned int* se
         /*std::cout.write(buffer.data(), 3);
         std::cout << '\n';*/
 
-        window->push_back(std::make_pair(packet, false));
+        (*window)[*seq_num] = std::make_pair(packet, false);
 
         *seq_num += readBytes;
     }
 }
 
 // Sends everything in the window
-void sendWindow(int fd, packet_list* window, sockaddr_in* addr, socklen_t addr_size) {
+void sendWindow(int fd, packet_map* window, sockaddr_in* addr, socklen_t addr_size) {
     auto end = window->end();
     for (auto it = window->begin(); it != end; it++) {
-        Packet packet = it->first;
-        bool resend = it->second;
+        Packet packet = it->second.first;
+        bool resend = it->second.second;
 
         /*std::cout << "Packet " << packet.getSeqnum() << " ";
         std::cout.write(packet.getPayload(), 3);
         std::cout << '\n';*/
 
-        it->second = true;
+        it->second.second = true;
 
         sendPacket(fd, addr, addr_size, &packet, resend);
     }
 }
 
-// Returns whether the last packet was popped
-bool removeAckedPackets(packet_list* window, unsigned int ack) {
-    Packet windowFront;
-    bool last = false;
+// Returns -1 if read fails for a non-timeout
+int readAcks(int fd, packet_map* window) {
+    bool timedOut = false;
+    std::vector<char> buffer(MAX_PACKET_SIZE);
 
-    while (!window->empty() && (windowFront = window->front().first).getSeqnum() < ack) {
-        last = windowFront.isLast();
-        window->pop_front();
+    while (!timedOut && !window->empty()) {
+        int readBytes = receivePacket(fd, buffer.data());
+        if (readBytes > 0) {
+            Packet ack(readBytes, buffer.data());
+
+            ack.printRecv();
+
+            window->erase(ack.getAcknum());
+        }
+
+        else if (readBytes < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            std::cout << "Timeout!\n";
+            timedOut = true;
+        }
+
+        else {
+            return -1;
+        }
     }
 
-    return last;
+    return 0;
 }
 
 #endif

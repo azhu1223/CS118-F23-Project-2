@@ -72,6 +72,7 @@ int main() {
     bool last = false;
 
     const char ack_buffer[] = {'a', 'c', 'k'};
+    const int ack_buffer_size = 3;
 
     bool readFirstPacket = false;
     while (!readFirstPacket) {
@@ -89,7 +90,7 @@ int main() {
     checkQueue(&queue, &expected_seq_num, &last, &outputStream);
 
     if (last) {
-        Packet ackPacket(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 3, ack_buffer);
+        Packet ackPacket(CLIENT_PORT_TO, SERVER_PORT, 0, 0, false, true, 3, ack_buffer);
 
         sendPacket(send_sockfd, &client_addr_to, addr_size, &ackPacket, false);
     }
@@ -97,7 +98,7 @@ int main() {
     while (!last) {
         bool foundNextPacket = false;
         // Read all incoming packets and enqueue
-        if (readAndEnqueuePackets(listen_sockfd, &expected_seq_num, &queue, &outputStream, &last, &foundNextPacket) < 0) {
+        if (readAndEnqueuePackets(listen_sockfd, &expected_seq_num, &queue, &outputStream, &last, &foundNextPacket, send_sockfd, &client_addr_to, addr_size, ack_buffer_size, ack_buffer) < 0) {
             std::cerr << "Error reading from socket.\n";
             close(listen_sockfd);
             close(send_sockfd);
@@ -108,29 +109,6 @@ int main() {
         if (!queue.empty()) {
             foundNextPacket = checkQueue(&queue, &expected_seq_num, &last, &outputStream);
         }
-
-        // Check queue for needed packets.
-        if (!queue.empty()) {
-            auto beginningIt = queue.begin();
-            Packet queueTop = *beginningIt;
-
-            while (!queue.empty() && queueTop.getSeqnum() == expected_seq_num) {
-                foundNextPacket = true;
-
-                last = queueTop.isLast();
-
-                expected_seq_num += queueTop.getPayloadLength();
-
-                outputStream.write(queueTop.getPayload(), queueTop.getPayloadLength());
-
-                queue.erase(beginningIt);
-            }
-        }
-
-        // Send accumulated ack, or if the next expected seq num not found, resend previous packet.
-        Packet ackPacket(CLIENT_PORT_TO, SERVER_PORT, 0, expected_seq_num, false, true, 3, ack_buffer);
-
-        sendPacket(send_sockfd, &client_addr_to, addr_size, &ackPacket, !foundNextPacket);
     }
 
     outputStream.close();
