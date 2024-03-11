@@ -3,11 +3,17 @@
 #include <arpa/inet.h>
 #include <cstdlib>
 #include <iostream>
+#include <fstream>
 #include <set>
+#include <vector>
+#include <list>
+#include <utility>
 
 class Packet;
 
-typedef std::set<Packet, std::greater<Packet>> packet_queue;
+typedef std::set<Packet> packet_queue;
+// Maps packets to whether they've been sent before or not
+typedef std::list<std::pair<Packet, bool>> packet_list;
 
 // MACROS
 #define SERVER_IP "127.0.0.1"
@@ -29,14 +35,16 @@ public:
     Packet(const Packet& packet);
     Packet();
     Packet& operator=(const Packet& packet);
+    unsigned short getSourcePort() const;
+    unsigned short getDestPort() const;
     unsigned int getSeqnum() const;
     unsigned int getAcknum() const;
     bool isAck() const;
     bool isLast() const;
     bool isValid() const;
     unsigned int getPayloadLength() const;
-    char* getPayload() const;
-    char* getPacket() const;
+    const char* getPayload() const;
+    const char* getPacket() const;
     unsigned short getLength() const;
     void printRecv() const;
     void printSend(bool isResend) const;
@@ -114,7 +122,7 @@ Packet::Packet(unsigned int packetSize, char* packet) {
     }
 
     // Extract payload
-    std::memcpy(&payload, packetPlace, payloadSize);
+    std::memcpy(payload, packetPlace, payloadSize);
 
     checkChecksum(checksum);
 }
@@ -130,6 +138,7 @@ Packet::Packet(const Packet& packet) {
     this->length = payloadLength + 14;
     // 8 for header, 4 for seqnum or acknum, 1 for ack, 1 for last
     std::memcpy(this->payload, packet.payload, payloadLength);
+    std::memcpy(this->packet, packet.packet, length);
 }
 
 Packet& Packet::operator=(const Packet& packet) {
@@ -147,6 +156,7 @@ Packet& Packet::operator=(const Packet& packet) {
     this->length = payloadLength + 14;
     // 8 for header, 4 for seqnum or acknum, 1 for ack, 1 for last
     std::memcpy(this->payload, packet.payload, payloadLength);
+    std::memcpy(this->packet, packet.packet, length);
 
     return *this;
 }
@@ -189,6 +199,14 @@ void Packet::checkChecksum(unsigned short checksum) {
     */
 }
 
+inline unsigned short Packet::getSourcePort() const {
+    return source_port;
+}
+
+inline unsigned short Packet::getDestPort() const {
+    return dest_port;
+}
+
 inline unsigned int Packet::getSeqnum() const {
     return seqnum;
 }
@@ -213,12 +231,12 @@ inline unsigned int Packet::getPayloadLength() const {
     return payloadLength;
 }
 
-inline char* Packet::getPayload() const {
-    return (char*) (payload);
+inline const char* Packet::getPayload() const {
+    return payload;
 }
 
-inline char* Packet::getPacket() const {
-    return (char*) packet;
+inline const char* Packet::getPacket() const {
+    return packet;
 }
 
 unsigned short Packet::getLength() const {
@@ -239,11 +257,32 @@ inline void Packet::printSend(bool isResend) const {
 void sendPacket(int fd, sockaddr_in* addr, socklen_t addr_size, Packet* packet, bool resend) {
     sendto(fd, packet->getPacket(), packet->getLength(), 0, (sockaddr*) addr, addr_size);
 
+    /*std::cout << "Source port: " << packet->getSourcePort() << ", Dest port: " << packet->getDestPort() << ", Length: " << packet->getLength() << '\n';
+    std::cout.write(packet->getPayload(), packet->getPayloadLength());
+    std::cout << '\n';*/
+
+    /*std::cout << "Packet sent has contents ";
+    std::cout.write(packet->getPacket(), packet->getLength());*/
     packet->printSend(resend);
 }
 
 int receivePacket(int fd, char* buffer) {
-    return recv(fd, buffer, MAX_PACKET_SIZE, 0);
+    int bytesRead =  recv(fd, buffer, MAX_PACKET_SIZE, 0);
+
+    /*if (bytesRead > 0) {
+        Packet packet(bytesRead, buffer);
+    
+        std::cout << "Received Source port: " << packet.getSourcePort() << ", Dest port: " << packet.getDestPort() << ", Length: " << packet.getLength() << '\n';
+        std::cout.write(packet.getPayload(), packet.getPayloadLength());
+        std::cout << '\n';
+    }
+
+    if (bytesRead > 0) {
+        std::cout << "Read packet ";
+        std::cout.write(buffer + 14, 3);
+        std::cout << '\n';
+    }*/
+    return bytesRead;
 }
 
 inline std::strong_ordering operator<=>(Packet left, Packet right) {
@@ -254,13 +293,38 @@ inline std::strong_ordering operator<=>(Packet left, Packet right) {
     return left.getSeqnum() <=> right.getSeqnum();
 }
 
+// Returns true if the next packet(s) was(were) found
+bool checkQueue(packet_queue* queue, unsigned int* expected_seq_num, bool* last, std::ofstream* outputStream) {
+    packet_queue::iterator it;
+    Packet queueTop;
+
+    bool foundNextPacket = false;
+
+    for (it = queue->begin(), queueTop = *it; !queue->empty() && queueTop.getSeqnum() == *expected_seq_num; it = queue->begin()) {
+        //std::cout << "Found next packet in queue.\n";
+
+        foundNextPacket = true;
+
+        *last = queueTop.isLast();
+
+        *expected_seq_num += queueTop.getPayloadLength();
+
+        outputStream->write(queueTop.getPayload(), queueTop.getPayloadLength());
+
+        queue->erase(it);
+    }
+
+    return foundNextPacket;
+}
+
 // Returns -1 on fail.
-int readAndEnqueueAllPackets(int fd, unsigned int expectedSeqNum, packet_queue* queue) {
-    char buffer[MAX_PACKET_SIZE];
+int readAndEnqueuePackets(int fd, unsigned int* expectedSeqNum, packet_queue* queue, 
+                            std::ofstream* outputStream, bool* last, bool* foundNextPacket) {
+    std::vector<char> buffer(MAX_PACKET_SIZE);
 
     bool timedOut = false;
     while (!timedOut) {
-        int bytesRead = receivePacket(fd, buffer);
+        int bytesRead = receivePacket(fd, buffer.data());
 
         if (bytesRead < 0) {
             // Timeout
@@ -276,15 +340,94 @@ int readAndEnqueueAllPackets(int fd, unsigned int expectedSeqNum, packet_queue* 
         }
 
         else {
-            Packet temp(bytesRead, buffer);
+            Packet temp(bytesRead, buffer.data());
 
-            if (temp.getSeqnum() >= expectedSeqNum) { 
-                queue->insert(temp);
+            temp.printRecv();
+
+            /*std::cout << "Read packet ";
+            std::cout.write(temp.getPacket(), temp.getLength());
+            std::cout << '\n';*/
+
+            unsigned int seqnum = temp.getSeqnum();
+
+            if (seqnum > *expectedSeqNum) { 
+                /*auto result = */queue->emplace(bytesRead, buffer.data());
+                /*if (result.second) {
+                    std::cout << "Successfully enqueued.\n";
+                }*/
+            }
+
+            else if (seqnum == *expectedSeqNum) {
+                //std::cout << "Wrote next packet instead of enqueuing.\n";
+
+                *foundNextPacket = true;
+                outputStream->write(temp.getPayload(), temp.getPayloadLength());
+
+                *expectedSeqNum += temp.getPayloadLength();
+
+                *last = temp.isLast();
+
+                if (!queue->empty()) {
+                    checkQueue(queue, expectedSeqNum, last, outputStream);
+                }
+            }
+
+            else {
+                std::cout << "Duplicate packet detected. Skipping.\n";
             }
         }
     }
 
     return 0;
+}
+
+void fillWindow(std::ifstream* textStream, packet_list* window, unsigned int* seq_num, unsigned int windowSize) {
+    std::vector<char> buffer(PAYLOAD_SIZE);
+
+    while (!textStream->eof() && window->size() < windowSize) {
+        textStream->read(buffer.data(), PAYLOAD_SIZE);
+
+        int readBytes = textStream->gcount();
+
+        Packet packet(CLIENT_PORT, SERVER_PORT_TO, *seq_num, 0, textStream->eof(), false, readBytes, buffer.data());
+
+        /*std::cout.write(buffer.data(), 3);
+        std::cout << '\n';*/
+
+        window->push_back(std::make_pair(packet, false));
+
+        *seq_num += readBytes;
+    }
+}
+
+// Sends everything in the window
+void sendWindow(int fd, packet_list* window, sockaddr_in* addr, socklen_t addr_size) {
+    auto end = window->end();
+    for (auto it = window->begin(); it != end; it++) {
+        Packet packet = it->first;
+        bool resend = it->second;
+
+        /*std::cout << "Packet " << packet.getSeqnum() << " ";
+        std::cout.write(packet.getPayload(), 3);
+        std::cout << '\n';*/
+
+        it->second = true;
+
+        sendPacket(fd, addr, addr_size, &packet, resend);
+    }
+}
+
+// Returns whether the last packet was popped
+bool removeAckedPackets(packet_list* window, unsigned int ack) {
+    Packet windowFront;
+    bool last = false;
+
+    while (!window->empty() && (windowFront = window->front().first).getSeqnum() < ack) {
+        last = windowFront.isLast();
+        window->pop_front();
+    }
+
+    return last;
 }
 
 #endif
